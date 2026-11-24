@@ -563,24 +563,40 @@ $('btnSaveAdd').onclick=()=>{
 let eStream=null, eScanning=false, eLast='', eStreak=0;
 
 async function startExpiryScan(){
-  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     $('escanMsg').textContent='카메라는 https에서만 가능합니다.';
     return;
   }
   try{
-    if(!eStream){
-      try{ eStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}); }
-      catch(e){ eStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false}); }
-      const v=$('ev'); v.srcObject=eStream; v.muted=true;
-      v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+    // 다른 탭 카메라 정리 (충돌 방지)
+    stopScan();
+    stopOrderScan();
+    if(stream){ try{ stream.getTracks().forEach(function(tr){ tr.stop(); }); }catch(e){} stream=null; }
+    if(oStream){ try{ oStream.getTracks().forEach(function(tr){ tr.stop(); }); }catch(e){} oStream=null; }
+    if(eStream){ try{ eStream.getTracks().forEach(function(tr){ tr.stop(); }); }catch(e){} eStream=null; }
+
+    try{
+      eStream=await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720} },
+        audio:false
+      });
+    }catch(e){
+      eStream=await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
     }
-    await $('ev').play();
+    const v=$('ev');
+    v.srcObject=eStream;
+    v.muted=true;
+    v.setAttribute('playsinline','');
+    v.setAttribute('webkit-playsinline','');
+    await v.play();
     $('expiryCamBox').classList.remove('hidden');
     eScanning=true; eLast=''; eStreak=0;
     $('escanMsg').textContent='바코드를 네모 칸에 맞추세요';
     await initBD();
+    if(!zx) loadZX();
     expiryTick();
   }catch(e){
+    console.error(e);
     $('escanMsg').textContent='카메라를 켤 수 없습니다.';
   }
 }
@@ -598,25 +614,33 @@ async function expiryTick(){
   if(v.readyState>=2 && v.videoWidth){
     try{ if(bd) code=await readBD(v); }catch(e){ bd=false; loadZX(); }
     if(!code && zx) code=readZX(v);
+    if(!code && !zx) loadZX();
   }
   if(code){
-    if(!ean13ok(code)) {}
-    else if(code===eLast) eStreak++;
-    else { eLast=code; eStreak=1; }
-    if(eStreak>=2){
-      const p = byFull.get(code);
-      if(p){
+    const dig = digits(code);
+    let p = null;
+    if(ean13ok(dig)) p = byFull.get(dig);
+    if(!p && dig.length >= 6){
+      const six = dig.slice(-6);
+      p = byCode.get(six) || byFull.get(PREFIX + six);
+    }
+    if(p){
+      if(dig === eLast || (eLast && dig.slice(-6) === eLast.slice(-6))) eStreak++;
+      else { eLast = dig; eStreak = 1; }
+      $('escanMsg').textContent = '인식 중... (' + eStreak + ')';
+      if(eStreak >= 1){
         if(navigator.vibrate) navigator.vibrate(60);
         setSelectedExpiryProduct(p);
         stopExpiryScan();
         showToast('제품이 선택되었습니다');
-      } else {
-        $('escanMsg').textContent='등록되지 않은 바코드입니다';
-        eLast=''; eStreak=0;
+        return;
       }
+    } else if(dig.length === 13){
+      $('escanMsg').textContent = '등록되지 않은 바코드입니다';
+      eLast = ''; eStreak = 0;
     }
   }
-  if(eScanning) setTimeout(expiryTick, 120);
+  if(eScanning) setTimeout(expiryTick, 80);
 }
 
 // ===== 발주 =====
